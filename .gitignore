@@ -1,2 +1,3 @@
-./venv/*
-./DACOMP-Manager-Tool/venv/*
+venv
+DACOMP-Manager-Tool/venv
+DACOMP-Manager-Tool/__pycache__
