@@ -1,5 +1,6 @@
 import customtkinter as ctk
 from tkinter import messagebox
+import tkinter
 import sqlite3
 import random
 
@@ -49,11 +50,23 @@ class TelaProdutos(ctk.CTkFrame):
 
         self.frame_compras = ctk.CTkScrollableFrame(self, width=300, label_text="Itens da Compra")
         self.frame_compras.grid(row=1, column=0, columnspan=5, pady=10, sticky="nswe")
+        self.carregar_tipos()
         self.atualizar_lista_compras()
 
     def voltar(self):
         self.destroy()
         self.master.abrir_tela_compras()
+
+    def carregar_tipos(self):
+        conn = sqlite3.connect("sistema_compras.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, tipo FROM tipos")
+        tipos = cursor.fetchall()
+        conn.close()
+
+        # Preencher o ComboBox com os nomes dos tipos
+        self.combo_tipo['values'] = [tipo[1] for tipo in tipos]
+        self.tipos_dict = {tipo[1]: tipo[0] for tipo in tipos}  # Mapeia nome para id
 
     def incremental_widget(self):
         self.frame_formulario = ctk.CTkFrame(self)
@@ -64,6 +77,11 @@ class TelaProdutos(ctk.CTkFrame):
         self.validade_entry = criar_entradas(self.frame_formulario, "Validade (YYYY-MM-DD)", "Ex: 2025-12-31", 1, 2, 0)
         self.valor_unit_entry = criar_entradas(self.frame_formulario, "Valor Unitário", "Ex: 12.50", 1, 3, 0)
         self.quantidade_entry = criar_entradas(self.frame_formulario, "Quantidade", "Ex: 10", 1, 4, 0)
+        
+        ctk.CTkLabel(self.frame_formulario, text="Tipo do Produto:").grid(row=1, column=5, pady=5)
+        self.combo_tipo = ctk.CTkComboBox(self.frame_formulario, state="readonly")
+        self.combo_tipo.grid(row=0, column=5, padx=5, pady=5)
+        
 
         self.botao_salvar = ctk.CTkButton(self.frame_formulario, text="Salvar Produto", command=self.salvar_produto)
         self.botao_salvar.grid(row=0, column=6)
@@ -77,18 +95,37 @@ class TelaProdutos(ctk.CTkFrame):
     def recuperar_dados(self):
         conn = sqlite3.connect("sistema_compras.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM produtos WHERE id_compra = ?", (self.id_compra,))
+        # Recupera os dados do produto junto com o nome do tipo
+        cursor.execute("""
+            SELECT p.*, t.tipo AS tipo_nome
+            FROM produtos p
+            LEFT JOIN tipos t ON p.id_tipo = t.id
+            WHERE p.id_compra = ?
+        """, (self.id_compra,))
         dados = cursor.fetchall()
         conn.close()
         return dados
-    
+
+    def recuperar_tipos(self):
+        """Recupera os tipos de produtos do banco de dados."""
+        conn = sqlite3.connect("sistema_compras.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, tipo FROM tipos")
+        tipos = cursor.fetchall()
+        conn.close()
+        return tipos
+
     def atualizar_lista_compras(self):
-        self.entries_produtos = []  # ← Adicionado para armazenar os dados editáveis
+        self.entries_produtos = []  # Armazena os dados editáveis
         # Limpa os botões antigos
         for widget in self.frame_compras.winfo_children():
             widget.destroy()
 
         dados = self.recuperar_dados()
+        tipos = self.recuperar_tipos()  # Recupera os tipos do banco de dados
+        tipos_dict = {tipo[1]: tipo[0] for tipo in tipos}  # Mapeia nome para id
+        tipos_nomes = [tipo[1] for tipo in tipos]
+
         for i, dado in enumerate(dados):
             row_base = i * 2  # Espaço para label e entry
 
@@ -101,9 +138,21 @@ class TelaProdutos(ctk.CTkFrame):
             entry_quantidade = criar_entradas(self.frame_compras, "Quantidade", str(dado[7]), row_base, 10)
             entry_estoque = criar_entradas(self.frame_compras, "Estoque", str(dado[8]), row_base, 12)
 
+            # ComboBox para editar o tipo do produto
+            
+            label = ctk.CTkLabel(self.frame_compras, text="Tipo")
+            label.grid(row=0, column=14, sticky="w",)
+            combo_tipo = ctk.CTkComboBox(self.frame_compras, state="readonly", values=tipos_nomes)
+            combo_tipo.set(dado[-1])  # Define o tipo atual como selecionado
+            combo_tipo.grid(row=row_base + 1, column=14, padx=0, pady=0, sticky="w")
+
+            # # Exibe o tipo do produto
+            # label_tipo = ctk.CTkLabel(self.frame_compras, text=f"Tipo: {dado[-1]}")
+            # label_tipo.grid(row=row_base + 1, column=0, padx=10, pady=(0, 0), sticky="w")
+
             # Botão para remover produto
             botao_remover = ctk.CTkButton(self.frame_compras, text="Remover", command=lambda id_produto=id_produto: self.remover_produto(id_produto))
-            botao_remover.grid(row=row_base + 1, column=14, padx=10, pady=(0,0), sticky="we")
+            botao_remover.grid(row=row_base + 1, column=16, padx=10, pady=(0, 0), sticky="we")
 
             # Guarda os dados para atualização
             self.entries_produtos.append({
@@ -114,7 +163,9 @@ class TelaProdutos(ctk.CTkFrame):
                 "validade": entry_validade,
                 "quantidade": entry_quantidade,
                 "estoque": entry_estoque,
+                "tipo": dado[-1]  # Nome do tipo
             })
+
     def gerar_codigo_barras_unico(self):
         conn = sqlite3.connect("sistema_compras.db")
         cursor = conn.cursor()
@@ -140,14 +191,15 @@ class TelaProdutos(ctk.CTkFrame):
             valor_unit,
             int(self.quantidade_entry.get() or "0"),
             int(self.quantidade_entry.get() or "0"),  # Estoque inicial igual à quantidade
+            self.tipos_dict[self.combo_tipo.get()]
         )
 
         try:
             conn = sqlite3.connect("sistema_compras.db")
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO produtos (id_compra, validade, cod_barras, nome, valor_unit, quantidade, estoque)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO produtos (id_compra, validade, cod_barras, nome, valor_unit, quantidade, estoque, id_tipo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, dados)
             conn.commit()
             conn.close()
